@@ -19,9 +19,13 @@ owned .github/workflows/security.yml
 owned .github/workflows/template-sync.yml
 owned .github/template-manifest
 owned .github/template-sync.md
+owned .github/FUNDING.yml
+owned cliff.toml
 
 seeded CLAUDE.md
 seeded .github/workflows/pr-checks.yml
+seeded .golangci.yml
+seeded .gitignore
 
 # The vault-based standards process this template replaced.
 retired .claude/skills/creating-issue
