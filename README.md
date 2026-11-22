@@ -30,6 +30,8 @@ adds its own tools, CLAUDE.md notes and docs.
   that refuses to listen beyond loopback without auth.
 - `internal/server`: the tool registry, plus the server's `Name` and `EnvPrefix`.
 - `internal/auth`, `internal/health`, `internal/logging`: shared packages.
+- `internal/telemetry`: OpenTelemetry traces and metrics for every MCP call, including
+  response sizes; off until an OTLP endpoint is set.
 - `tools/example`: one `echo` tool showing the shape of a tool group.
 - Tests: tools end to end over the SDK's in-memory transport (`TestListTools`), and
   `integration/` over real Streamable HTTP (`TestMCPTools`).
@@ -46,7 +48,7 @@ adds its own tools, CLAUDE.md notes and docs.
 - **owned** files stay identical to the template: the process doc, ADR and spec
   templates, issue and PR templates, `.claude/settings.json`, security and Dependabot
   config, sponsorship, `cliff.toml`, the sync workflow, and `internal/auth`,
-  `internal/health` and `internal/logging`.
+  `internal/health`, `internal/logging` and `internal/telemetry`.
 - **seeded** files start from the template, then belong to the repo: `CLAUDE.md`,
   `main.go`, the Taskfile, Dockerfile, compose, `.env.example`, `.golangci.yml`,
   `.gitignore`, and the PR Checks and Release workflows.
