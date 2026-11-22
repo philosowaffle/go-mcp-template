@@ -1,4 +1,6 @@
-# Build output (add /<binary> and /<binary>.exe for this repo's server)
+# Build output (`go build` in the repo root writes the binary here)
+/go-mcp-template
+/go-mcp-template.exe
 bin/
 dist/
 

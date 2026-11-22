@@ -1,0 +1,86 @@
+version: "3"
+
+vars:
+  # The binary and image name; keep in step with server.Name.
+  NAME: go-mcp-template
+  PKG:
+    sh: echo "$(go list -m)/internal/server"
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  COMMIT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo unknown
+  LDFLAGS: -X {{.PKG}}.Version={{.VERSION}} -X {{.PKG}}.Commit={{.COMMIT}}
+
+tasks:
+  build:
+    desc: Build the project binary
+    cmds:
+      - go build -ldflags "{{.LDFLAGS}}" -o bin/{{.NAME}} .
+
+  run:
+    desc: Run the server locally (reads .env if present)
+    dotenv: [".env"]
+    cmds:
+      - go run -ldflags "{{.LDFLAGS}}" .
+
+  ci:
+    desc: Run the same checks as PR Checks (format, vet, lint, build, test)
+    cmds:
+      - task: fmt:check
+      - go vet ./...
+      - go vet -tags integration ./...
+      - task: lint
+      - go build ./...
+      - task: test
+
+  fmt:check:
+    desc: Fail if any Go file needs formatting
+    cmds:
+      - |
+        out="$(gofmt -l .)"
+        if [ -n "$out" ]; then
+          echo "The following files need formatting:"
+          echo "$out"
+          exit 1
+        fi
+
+  test:
+    desc: Run all unit tests
+    cmds:
+      - go test -race ./...
+
+  test:integration:
+    desc: Run integration tests over a real Streamable HTTP client (reads .env if present)
+    dotenv: [".env"]
+    cmds:
+      - go test -tags integration -count=1 -v ./integration/...
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run
+
+  fmt:
+    desc: Format all Go source files
+    cmds:
+      - go fmt ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  docker:build:
+    desc: Build the Docker image
+    cmds:
+      - docker build --build-arg VERSION={{.VERSION}} --build-arg COMMIT={{.COMMIT}} -t {{.NAME}} .
+
+  docker:up:
+    desc: Start the published image via docker compose
+    cmds:
+      - docker compose up -d
+
+  docker:down:
+    desc: Stop docker compose
+    cmds:
+      - docker compose down

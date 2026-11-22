@@ -1,0 +1,245 @@
+name: Release
+
+# Three ways in:
+#   - Actions → Release → "Run workflow" with a version: tags main and releases.
+#   - Pushing a vX.Y.Z tag: releases that tag.
+#   - Merging to main: publishes a `main` image only (no GitHub release).
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. v0.1.0 (a new tag on main)"
+        required: true
+        type: string
+
+# Seeded by go-mcp-template. The names come from the repository and go.mod.
+# If the binary and image are named otherwise (kroger-cart publishes
+# kroger-mcp), set NAME and the end of IMAGE here. LICENSE must match the
+# LICENSE file.
+env:
+  NAME: ${{ github.event.repository.name }}
+  IMAGE: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+  LICENSE: GPL-3.0-only
+
+# Jobs widen this as they need to.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Works out what this run is, and for a manual run creates the tag.
+  prepare:
+    # The template itself publishes nothing; repos made from it do.
+    if: github.repository != 'philosowaffle/go-mcp-template'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release: ${{ steps.mode.outputs.release }}
+      version: ${{ steps.mode.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Resolve mode
+        id: mode
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
+            workflow_dispatch:refs/heads/main)
+              version="$INPUT_VERSION" ;;
+            workflow_dispatch:*)
+              echo "::error::Run the release from main, not $GITHUB_REF_NAME"; exit 1 ;;
+            push:refs/tags/*)
+              version="$GITHUB_REF_NAME" ;;
+            *)
+              echo "release=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must look like v1.2.3, got '$version'"; exit 1
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Tags pushed with GITHUB_TOKEN don't start new workflow runs, so this
+      # run carries on with the release itself.
+      - name: Create tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ steps.mode.outputs.version }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "::error::Tag $VERSION already exists"; exit 1
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin "$VERSION"
+
+  image:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Build-provenance attestation for the image.
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.version || github.sha }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          # Set explicitly rather than relying on GitHub's license detection.
+          labels: |
+            org.opencontainers.image.licenses=${{ env.LICENSE }}
+          # Release: 1.2.3, 1.2, latest.  Merge to main: main, sha-abc1234.
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.prepare.outputs.version }},enable=${{ needs.prepare.outputs.release == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.prepare.outputs.version }},enable=${{ needs.prepare.outputs.release == 'true' }}
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.release == 'true' }}
+            type=raw,value=main,enable=${{ needs.prepare.outputs.release != 'true' }}
+            type=sha,enable=${{ needs.prepare.outputs.release != 'true' }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version || 'main' }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max
+
+      # Attestations need a public repo (or GitHub Enterprise Cloud), so skip
+      # them while the repo is private rather than fail every merge to main.
+      - name: Attest image
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  release:
+    needs: [prepare, image]
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Build-provenance attestation for the binaries.
+      attestations: write
+      id-token: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.version }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          # Newest 1.26 patch, so builds and govulncheck get stdlib security
+          # fixes. go.mod's `go` line is only the minimum language version.
+          go-version: "1.26.x"
+          check-latest: true
+
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        id: cliff
+        with:
+          config: cliff.toml
+          args: --current --strip header
+
+      - name: Build binaries
+        env:
+          # Static, reproducible binaries: no cgo, no local paths embedded.
+          CGO_ENABLED: "0"
+          GOFLAGS: -trimpath
+        run: |
+          mkdir -p dist
+          pkg="$(go list -m)/internal/server"
+          ldflags="-s -w -X $pkg.Version=$VERSION -X $pkg.Commit=$(git rev-parse --short HEAD)"
+          for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+            os="${target%/*}"; arch="${target#*/}"
+            ext=""; [ "$os" = windows ] && ext=".exe"
+            GOOS=$os GOARCH=$arch go build -ldflags "$ldflags" -o "dist/$NAME-$os-$arch$ext" .
+          done
+          (cd dist && sha256sum "$NAME"-* > SHA256SUMS)
+
+      - name: Attest binaries
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          tag_name: ${{ env.VERSION }}
+          body: |
+            ${{ steps.cliff.outputs.content }}
+
+            **Image:** `docker pull ${{ env.IMAGE }}:${{ env.VERSION }}`
+          files: dist/*
+
+  # Separate job so a failure here (e.g. a protected main branch) doesn't hide
+  # a successful release.
+  changelog:
+    needs: [prepare, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Generate CHANGELOG.md
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        with:
+          config: cliff.toml
+          args: --verbose
+        env:
+          OUTPUT: CHANGELOG.md
+
+      # Pushed with GITHUB_TOKEN, so this commit doesn't trigger another run.
+      - name: Commit CHANGELOG.md
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git diff --staged --quiet || git commit -m "chore: update CHANGELOG.md for $VERSION"
+          git push origin HEAD:main

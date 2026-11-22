@@ -26,12 +26,30 @@ CLAUDE.md under Project-Specific Notes, and win where they differ.
    and update `docs/architecture.md` and `docs/runbook.md` if they changed.
 4. A PR is ready only when every check is green.
 
+## Code layout
+
+- `main.go` serves Streamable HTTP: `/healthz`, protected-resource metadata when auth
+  is on, and the MCP endpoint (bearer auth when on, cross-origin browser requests
+  refused). It won't listen beyond loopback without auth unless
+  `<PREFIX>_ALLOW_UNAUTHENTICATED=true`.
+- `internal/server` is the one tool registry (`server.New()`), and holds `Name` and
+  `EnvPrefix`. Every variable the server reads starts with `EnvPrefix`.
+- `tools/<group>` holds a group of tools, registered from `server.New()`.
+- `internal/auth`, `internal/health` and `internal/logging` are shared with the
+  template: change them there.
+- **Adding a tool:** add it under `tools/`, register it in `server.New()`, and add it
+  to `TestListTools` and `TestMCPTools`.
+
 ## Testing
 
 - Unit tests live beside the code (`_test.go`); prefer table-driven tests.
 - Each spec acceptance criterion has a test that checks it, named so the link is
   obvious (e.g. `TestParseGroceryList_SkipsComments`).
-- Integration tests use the `integration` build tag and live in `integration/`.
+- Tools are tested end to end in `internal/server` over the SDK's in-memory
+  transport, against fakes of what they wrap (a fake API or CLI), not mocks.
+- Integration tests use the `integration` build tag and live in `integration/`. They
+  run the server over a real Streamable HTTP client against the real dependency, and
+  `TestMCPTools` fails for any tool without a case.
 
 ## Template sync
 

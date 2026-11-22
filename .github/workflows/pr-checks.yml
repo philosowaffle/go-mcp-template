@@ -63,6 +63,22 @@ jobs:
         if: hashFiles('Dockerfile') != ''
         run: docker build -t "${{ github.event.repository.name }}:ci" .
 
+  # Runs integration/ (build tag `integration`) once the fast checks pass.
+  # Give it the services or secrets the tests need.
+  integration:
+    runs-on: ubuntu-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+
+      - name: Integration tests
+        run: go test -tags integration -count=1 -v ./integration/...
+
   semantic-pr:
     runs-on: ubuntu-latest
     permissions:
