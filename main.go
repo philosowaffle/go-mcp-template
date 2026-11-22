@@ -24,6 +24,7 @@ import (
 	"github.com/philosowaffle/go-mcp-template/internal/health"
 	"github.com/philosowaffle/go-mcp-template/internal/logging"
 	"github.com/philosowaffle/go-mcp-template/internal/server"
+	"github.com/philosowaffle/go-mcp-template/internal/telemetry"
 )
 
 // listenAddr defaults to loopback so a bare local run without auth is
@@ -109,6 +110,19 @@ func run(addr string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Off unless an OTLP endpoint is set (OTEL_EXPORTER_OTLP_ENDPOINT).
+	shutdownTelemetry, err := telemetry.Setup(ctx, server.Name, server.Version)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(sctx); err != nil {
+			slog.Warn("telemetry shutdown", "err", err)
+		}
+	}()
+
 	// Build the clients the tools need here (an API client, a CLI wrapper)
 	// and pass them to newHandler and server.New.
 
@@ -154,9 +168,11 @@ func run(addr string) error {
 //	/.well-known/...              protected-resource metadata when auth is on,
 //	                              404 otherwise (no auth, per RFC 9728)
 //	/                             MCP Streamable HTTP (bearer auth when on;
-//	                              cross-origin browser requests rejected)
+//	                              cross-origin browser requests rejected;
+//	                              traced when telemetry is on)
 func newHandler(ctx context.Context) (http.Handler, error) {
 	srv := server.New()
+	telemetry.Instrument(srv)
 	var mcpHandler http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return srv
 	}, &mcp.StreamableHTTPOptions{
@@ -199,7 +215,7 @@ func newHandler(ctx context.Context) (http.Handler, error) {
 	// cross-origin browser requests on any address, so a web page can't drive
 	// the tools from the user's browser. Clients that send neither Origin nor
 	// Sec-Fetch-Site (Claude Code, claude.ai's servers) are unaffected.
-	mux.Handle("/", http.NewCrossOriginProtection().Handler(mcpHandler))
+	mux.Handle("/", telemetry.HTTPHandler(http.NewCrossOriginProtection().Handler(mcpHandler), server.Name))
 	return mux, nil
 }
 
