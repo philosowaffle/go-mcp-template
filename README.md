@@ -21,8 +21,6 @@ adds its own tools, CLAUDE.md notes and docs.
 3. Replace `tools/example` with the server's tools, and fill in `CLAUDE.md`
    (Project Overview and Project-Specific Notes), `docs/architecture.md` and
    `docs/runbook.md`. Check `LICENSE` and the `LICENSE` value in `release.yml`.
-4. While this template is private, add a `TEMPLATE_READ_TOKEN` secret: a fine-grained
-   token with Contents: read on this repo.
 
 `task run` starts the server on `127.0.0.1:8080`; `task --list` shows the rest.
 
