@@ -180,7 +180,7 @@ func middleware(next mcp.MethodHandler) mcp.MethodHandler {
 		ctx, span := tracer.Start(ctx, method, trace.WithSpanKind(trace.SpanKindServer))
 		defer span.End()
 
-		// Measuring sizes means marshalling the response once more, so do it
+		// Measuring sizes means marshaling the response once more, so do it
 		// only when something will see the numbers.
 		measure := span.IsRecording() || slog.Default().Enabled(ctx, slog.LevelDebug) || metricsOn()
 
