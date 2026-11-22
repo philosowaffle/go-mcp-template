@@ -2,8 +2,14 @@ name: PR Checks
 
 # Seeded by go-mcp-template: repos add their own jobs (an integration job, extra
 # tools for tests) below `checks`. Template sync merges changes here by hand.
+#
+# Also runs on each push to main, so the merged commit is checked as it landed.
+# Release waits for this workflow (by its name) to pass there before it
+# publishes; keep the name in step with release.yml.
 on:
   pull_request:
+    branches: [main]
+  push:
     branches: [main]
 
 # Jobs widen this as they need to.
@@ -79,7 +85,9 @@ jobs:
       - name: Integration tests
         run: go test -tags integration -count=1 -v ./integration/...
 
+  # The PR title becomes the squash commit, so this only applies to PRs.
   semantic-pr:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read

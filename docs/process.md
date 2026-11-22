@@ -14,6 +14,9 @@ CLAUDE.md under Project-Specific Notes, and win where they differ.
 - **Merging:** squash only. Every PR has a label matching its type, and `Closes #N` when it
   has an issue.
 - **Versioning:** SemVer tags (`vMAJOR.MINOR.PATCH`) are the source of truth.
+  Merging to `main` releases on its own once PR Checks passes on the merged commit:
+  a breaking change bumps major, `feat` minor, `fix` or `perf` patch, and other types
+  publish only the `main` image. So the PR title's type decides the release.
 
 ## Workflow
 
