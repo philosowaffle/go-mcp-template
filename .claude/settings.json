@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(go *)",
+      "Bash(task *)"
+    ],
+    "deny": [
+      "Bash(git push origin main)",
+      "Bash(git push --force*)",
+      "Read(.env*)",
+      "Write(.env*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "go fmt ./... >/dev/null 2>&1 || true"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git push *)",
+            "command": "if [ \"$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ]; then echo 'Direct push to main is not allowed. Open a PR instead.' >&2; exit 2; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

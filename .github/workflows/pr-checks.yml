@@ -1,0 +1,73 @@
+name: PR Checks
+
+# Seeded by go-mcp-template: repos add their own jobs (an integration job, extra
+# tools for tests) below `checks`. Template sync merges changes here by hand.
+on:
+  pull_request:
+    branches: [main]
+
+# Jobs widen this as they need to.
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The Go steps skip until the repo has a go.mod, so the template itself
+      # stays green.
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        if: hashFiles('go.mod') != ''
+        with:
+          # Newest 1.26 patch, so builds and govulncheck get stdlib security
+          # fixes. go.mod's `go` line is only the minimum language version.
+          go-version: "1.26.x"
+          check-latest: true
+
+      - name: Format check
+        if: hashFiles('go.mod') != ''
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "The following files need formatting:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Vet
+        if: hashFiles('go.mod') != ''
+        run: |
+          go vet ./...
+          # Integration tests only build with their tag; vet them too so they
+          # can't rot.
+          go vet -tags integration ./...
+
+      - name: Lint
+        if: hashFiles('go.mod') != ''
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          # Pinned so a new golangci-lint release can't break CI unannounced.
+          # Keep in step with the version contributors run locally.
+          version: v2.14.0
+
+      - name: Build
+        if: hashFiles('go.mod') != ''
+        run: go build ./...
+
+      - name: Test
+        if: hashFiles('go.mod') != ''
+        run: go test -race ./...
+
+      - name: Docker build
+        if: hashFiles('Dockerfile') != ''
+        run: docker build -t "${{ github.event.repository.name }}:ci" .
+
+  semantic-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@2252a14e810aa9b85c2d560bd7070c802206ecf6 # v6.1.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
