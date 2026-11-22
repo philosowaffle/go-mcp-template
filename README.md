@@ -37,8 +37,9 @@ adds its own tools, CLAUDE.md notes and docs.
   `integration/` over real Streamable HTTP (`TestMCPTools`).
 - `Taskfile.yml`, a multi-stage distroless `Dockerfile`, a sample
   `docker-compose.yml` and `.env.example`.
-- Workflows: PR Checks, Release (multi-arch image to GHCR, binaries and changelog on a
-  tag), Security and Template sync.
+- Workflows: PR Checks (on PRs and on main), Release (after a green merge to main, a
+  version from the commit types; multi-arch image to GHCR, binaries and changelog),
+  Security and Template sync.
 
 ## What's shared
 
