@@ -1,0 +1,49 @@
+# Sample compose for self-hosting go-mcp-template.
+#
+#   docker compose up -d         # pull + run the published image
+#   docker compose up -d --build # build from local source instead (uncomment build: below)
+#
+# Put secrets in a .env file next to this one (gitignored) or export them in
+# your shell; compose substitutes them below. A private image needs
+# `docker login ghcr.io` first.
+#
+# Connect Claude:  claude mcp add --transport http go-mcp-template http://<host>:8080
+
+services:
+  go-mcp-template:
+    image: ghcr.io/philosowaffle/go-mcp-template:latest
+    # Uncomment to build from the source in this folder instead of pulling:
+    # build: .
+    container_name: go-mcp-template
+    restart: unless-stopped
+    ports:
+      # Loopback only: reachable from this machine, not the network. Without
+      # MCP auth, anyone who can reach the port can use every tool. To expose
+      # it, set up MCP auth below (preferred), or publish "8080:8080" on a
+      # trusted network.
+      - "127.0.0.1:8080:8080"
+    environment:
+      GO_MCP_TEMPLATE_ADDR: ":8080"
+      # The server refuses to listen beyond loopback without MCP auth unless
+      # this is set. Inside the container it must listen on all interfaces for
+      # the port mapping to work; the loopback-only publish above is what keeps
+      # it private. Remove this once GO_MCP_TEMPLATE_OIDC_ISSUER is set.
+      GO_MCP_TEMPLATE_ALLOW_UNAUTHENTICATED: "true"
+      # GO_MCP_TEMPLATE_LOG_LEVEL: "info"   # set "trace" for per-request logs
+      TZ: "${TZ:-America/Denver}"
+      # --- MCP auth (optional) ---
+      # Set an OIDC issuer to require OAuth bearer tokens (protected resource).
+      # Leave unset to run unauthenticated (loopback or a trusted network
+      # only).
+      # GO_MCP_TEMPLATE_OIDC_ISSUER: "https://auth.example.com"
+      # GO_MCP_TEMPLATE_OIDC_RESOURCE: "https://go-mcp-template.example.com"
+      # GO_MCP_TEMPLATE_OIDC_SCOPES: "mcp"
+      # GO_MCP_TEMPLATE_OIDC_REQUIRE_AT_JWT: "false"  # only if your IdP omits typ at+jwt
+    volumes:
+      # Runtime state. A named volume inherits the image's nonroot ownership;
+      # for a bind mount, chown the host directory to 65532:65532 first.
+      - go-mcp-template-data:/data
+    # The image ships its own HEALTHCHECK (the binary probes /healthz).
+
+volumes:
+  go-mcp-template-data:

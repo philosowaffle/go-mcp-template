@@ -21,11 +21,29 @@ owned .github/template-manifest
 owned .github/template-sync.md
 owned .github/FUNDING.yml
 owned cliff.toml
+# Server packages every repo uses as they are. Names come from server.Name and
+# server.EnvPrefix, so these files carry none of their own.
+owned internal/auth/auth.go
+owned internal/auth/auth_test.go
+owned internal/health/health.go
+owned internal/health/health_test.go
+owned internal/logging/logging.go
+owned internal/logging/logging_test.go
 
 seeded CLAUDE.md
 seeded .github/workflows/pr-checks.yml
 seeded .golangci.yml
 seeded .gitignore
+seeded main.go
+seeded main_test.go
+seeded Taskfile.yml
+seeded Dockerfile
+seeded docker-compose.yml
+seeded .env.example
+seeded .github/workflows/release.yml
+
+# Not listed, so never synced: internal/server, tools/, integration/ and
+# scripts/init.sh are starting points that each repo makes its own.
 
 # The vault-based standards process this template replaced.
 retired .claude/skills/creating-issue

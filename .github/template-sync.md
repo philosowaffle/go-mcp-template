@@ -14,6 +14,13 @@ are at `https://github.com/{{TEMPLATE_REPO}}/tree/{{SHA}}`.
      Standards deviations paragraph and every section `docs/process.md` now covers, but
      keep every repo-specific rule. For `pr-checks.yml`, keep the repo's own jobs and
      steps (integration tests, extra tools) and drop the `tmp/` check.
+   - For server files the repo already has (`main.go`, `Taskfile.yml`, `Dockerfile`,
+     compose, `release.yml`), keep this repo's version and its extra services, tools
+     and steps. Take only the shared behaviour the template's version adds, and the
+     calls the owned packages now need (`auth.ConfigFromEnv(server.Name,
+     server.EnvPrefix)`, `logging.Setup(server.EnvPrefix)`), adding `Name` and
+     `EnvPrefix` to `internal/server` if they're missing. Keep the repo's env variable
+     names: `EnvPrefix` must match them.
 3. **retired:** delete the path, and anything that only pointed to it.
 4. Write `{{SHA}}` to `.template-version` (just the SHA and a newline).
 5. Run `task ci` and fix what breaks.

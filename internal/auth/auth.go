@@ -1,0 +1,243 @@
+// Package auth makes an MCP server an OAuth 2.0 protected resource (the MCP
+// authorization spec, RFC 9728). It runs no OAuth flows of its own: an
+// external authorization server such as Authelia handles login, consent and
+// token issuance. This package only
+//
+//   - serves protected-resource metadata naming that authorization server,
+//   - answers unauthenticated requests with 401 and a WWW-Authenticate
+//     header pointing at the metadata, and
+//   - validates the bearer JWT access token (RFC 9068) on every request:
+//     signature against the issuer's JWKS, plus iss, aud and exp.
+//
+// Auth is opt-in. With no issuer configured the server is unauthenticated,
+// which suits LAN or VPN-only deployments.
+//
+// This guards access to the MCP endpoint itself. Credentials for whatever
+// service the server wraps are a separate concern.
+//
+// Settings come from <PREFIX>_OIDC_* variables, where the prefix is the
+// server's own (e.g. KROGER_MCP), so the package is shared unchanged by every
+// repo made from the Go MCP template.
+package auth
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"strings"
+
+	"github.com/coreos/go-oidc/v3/oidc"
+	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
+)
+
+// MetadataPath is the well-known path of the protected-resource metadata
+// document.
+const MetadataPath = "/.well-known/oauth-protected-resource"
+
+// Config is the resource-server configuration, read from the environment.
+type Config struct {
+	// Name is the server's name, advertised as the metadata's resource_name.
+	Name string
+	// EnvPrefix is the server's environment variable prefix, e.g. KROGER_MCP.
+	// It names the variables in error messages.
+	EnvPrefix string
+	// Issuer is the authorization server's issuer URL, used for OIDC discovery.
+	Issuer string
+	// Resource identifies this server. It is advertised in the metadata and
+	// must appear in the access token's aud claim.
+	Resource string
+	// Scopes, if set, are required on every request and advertised as
+	// supported.
+	Scopes []string
+	// RequireATJWT rejects tokens whose JOSE typ header isn't at+jwt
+	// (RFC 9068), so an ID token for the same audience can't be used as an
+	// access token. On unless <PREFIX>_OIDC_REQUIRE_AT_JWT is false.
+	RequireATJWT bool
+}
+
+// ConfigFromEnv reads the <envPrefix>_OIDC_* variables for the server name.
+func ConfigFromEnv(name, envPrefix string) Config {
+	c := Config{Name: name, EnvPrefix: envPrefix}
+	c.Issuer = strings.TrimSpace(os.Getenv(c.env("ISSUER")))
+	c.Resource = strings.TrimSpace(os.Getenv(c.env("RESOURCE")))
+	c.Scopes = strings.Fields(os.Getenv(c.env("SCOPES")))
+	c.RequireATJWT = !isFalse(os.Getenv(c.env("REQUIRE_AT_JWT")))
+	return c
+}
+
+// env names the <EnvPrefix>_OIDC_<key> variable.
+func (c Config) env(key string) string {
+	return c.EnvPrefix + "_OIDC_" + key
+}
+
+// isFalse reports whether s is an explicit "off" value. Anything else,
+// including the empty string, leaves a default-on setting on.
+func isFalse(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "false", "0", "no", "off":
+		return true
+	}
+	return false
+}
+
+// Enabled reports whether an issuer is configured, which turns auth on.
+func (c Config) Enabled() bool {
+	return c.Issuer != ""
+}
+
+// Authenticator validates bearer tokens and serves the metadata document.
+type Authenticator struct {
+	cfg      Config
+	verifier *oidc.IDTokenVerifier
+	metadata *oauthex.ProtectedResourceMetadata
+}
+
+// New builds an Authenticator from cfg. It runs OIDC discovery, so the
+// issuer must be reachable at startup.
+func New(ctx context.Context, cfg Config) (*Authenticator, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
+	if err != nil {
+		return nil, fmt.Errorf("auth: oidc discovery for %q: %w", cfg.Issuer, err)
+	}
+
+	// go-oidc checks that aud contains ClientID, so passing our resource id
+	// enforces the audience requirement.
+	verifier := provider.Verifier(&oidc.Config{
+		ClientID:             cfg.Resource,
+		SupportedSigningAlgs: []string{oidc.RS256},
+	})
+	return newAuthenticator(cfg, verifier), nil
+}
+
+func newAuthenticator(cfg Config, verifier *oidc.IDTokenVerifier) *Authenticator {
+	return &Authenticator{
+		cfg:      cfg,
+		verifier: verifier,
+		metadata: &oauthex.ProtectedResourceMetadata{
+			Resource:               cfg.Resource,
+			AuthorizationServers:   []string{cfg.Issuer},
+			ScopesSupported:        cfg.Scopes,
+			BearerMethodsSupported: []string{"header"},
+			ResourceName:           cfg.Name,
+		},
+	}
+}
+
+func (c Config) validate() error {
+	if c.Issuer == "" {
+		return fmt.Errorf("auth: %s is required", c.env("ISSUER"))
+	}
+	if c.Resource == "" {
+		return fmt.Errorf("auth: %s is required", c.env("RESOURCE"))
+	}
+	return nil
+}
+
+// MetadataHandler serves the protected-resource metadata document.
+func (a *Authenticator) MetadataHandler() http.Handler {
+	return mcpauth.ProtectedResourceMetadataHandler(a.metadata)
+}
+
+// Middleware enforces a valid bearer token on the wrapped handler.
+func (a *Authenticator) Middleware() func(http.Handler) http.Handler {
+	return mcpauth.RequireBearerToken(a.verify, &mcpauth.RequireBearerTokenOptions{
+		ResourceMetadataURL: a.metadataURL(),
+		Scopes:              a.cfg.Scopes,
+	})
+}
+
+// Issuer returns the configured authorization server.
+func (a *Authenticator) Issuer() string { return a.cfg.Issuer }
+
+// Metadata returns the advertised protected-resource metadata.
+func (a *Authenticator) Metadata() *oauthex.ProtectedResourceMetadata { return a.metadata }
+
+func (a *Authenticator) metadataURL() string {
+	return strings.TrimRight(a.cfg.Resource, "/") + MetadataPath
+}
+
+func (a *Authenticator) verify(ctx context.Context, token string, _ *http.Request) (*mcpauth.TokenInfo, error) {
+	if a.cfg.RequireATJWT {
+		if err := checkAccessTokenType(token, a.cfg.env("REQUIRE_AT_JWT")); err != nil {
+			slog.Warn("auth: token rejected", "err", err)
+			return nil, fmt.Errorf("%w: %w", mcpauth.ErrInvalidToken, err)
+		}
+	}
+
+	idt, err := a.verifier.Verify(ctx, token)
+	if err != nil {
+		// The client only sees a bare 401, so log the real reason. Typical
+		// causes: aud does not contain the resource, an opaque token instead
+		// of a JWT ("malformed jwt"), or an issuer mismatch.
+		slog.Warn("auth: token rejected", "err", err)
+		return nil, fmt.Errorf("%w: %w", mcpauth.ErrInvalidToken, err)
+	}
+
+	var claims struct {
+		Scope string          `json:"scope"`
+		Scp   json.RawMessage `json:"scp"`
+	}
+	if err := idt.Claims(&claims); err != nil {
+		slog.Warn("auth: token rejected", "err", err)
+		return nil, fmt.Errorf("%w: claims: %w", mcpauth.ErrInvalidToken, err)
+	}
+
+	return &mcpauth.TokenInfo{
+		Scopes:     append(strings.Fields(claims.Scope), scpScopes(claims.Scp)...),
+		Expiration: idt.Expiry,
+		UserID:     idt.Subject,
+	}, nil
+}
+
+// checkAccessTokenType requires the JOSE typ header of an RFC 9068 access
+// token. go-oidc's verifier doesn't look at typ, so without this an ID token
+// whose aud contains the resource would also be accepted. optOut names the
+// variable that turns the check off.
+func checkAccessTokenType(token, optOut string) error {
+	header, _, ok := strings.Cut(token, ".")
+	if !ok {
+		return errors.New("malformed jwt")
+	}
+	b, err := base64.RawURLEncoding.DecodeString(header)
+	if err != nil {
+		return fmt.Errorf("malformed jwt header: %w", err)
+	}
+	var h struct {
+		Typ string `json:"typ"`
+	}
+	if err := json.Unmarshal(b, &h); err != nil {
+		return fmt.Errorf("malformed jwt header: %w", err)
+	}
+	switch strings.ToLower(h.Typ) {
+	case "at+jwt", "application/at+jwt":
+		return nil
+	}
+	return fmt.Errorf("jwt typ %q is not at+jwt; is this an ID token? (set %s=false if your IdP omits it)", h.Typ, optOut)
+}
+
+// scpScopes reads the scp claim, which IdPs emit as a space-separated string
+// or a JSON array.
+func scpScopes(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return list
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strings.Fields(s)
+	}
+	return nil
+}
