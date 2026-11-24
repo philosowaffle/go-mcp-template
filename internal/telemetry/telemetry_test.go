@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel"
@@ -307,15 +308,23 @@ func TestHTTPHandler_ToolSpanIsChildOfRequest(t *testing.T) {
 	if !parent.IsValid() {
 		t.Fatal("tool span has no parent")
 	}
-	for _, s := range spans.Ended() {
-		if s.SpanContext().SpanID() == parent.SpanID() {
-			if s.InstrumentationScope().Name == instrumentationName {
-				t.Fatalf("tool span's parent is another MCP span %q, not the HTTP request", s.Name())
+	// otelhttp ends the request span after the handler returns, which can be
+	// after the client has its response, so wait briefly for it.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		for _, s := range spans.Ended() {
+			if s.SpanContext().SpanID() == parent.SpanID() {
+				if s.InstrumentationScope().Name == instrumentationName {
+					t.Fatalf("tool span's parent is another MCP span %q, not the HTTP request", s.Name())
+				}
+				return
 			}
-			return
 		}
+		if time.Now().After(deadline) {
+			t.Fatal("tool span's parent is not a recorded HTTP span")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("tool span's parent is not a recorded HTTP span")
 }
 
 func TestInstrument_LogsSizeAtDebug(t *testing.T) {
